@@ -1,0 +1,40 @@
+name: M3U Güncelle
+
+on:
+  schedule:
+    - cron: '30 */5 * * *'
+  workflow_dispatch:
+
+jobs:
+  update-playlist:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: 📥 Repo'yu çek
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 🔄 Playlist'i güncelle
+        env:
+          BASE_URL: ${{ secrets.BASE_URL }}
+          KANALLAR: ${{ secrets.KANALLAR }}
+        run: python update_playlist.py
+      
+      - name: 📤 Değişiklikleri push'la
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "actions@github.com"
+          git add playlist.m3u
+          if ! git diff --staged --quiet; then
+            git commit -m "🔄 Playlist güncellendi [$(date +'%Y-%m-%d %H:%M UTC')]"
+            git push
+            echo "✅ Değişiklikler push'landı"
+          else
+            echo "ℹ️ Değişiklik yok, push atılmadı"
+          fi
