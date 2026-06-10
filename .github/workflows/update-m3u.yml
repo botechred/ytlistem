@@ -23,7 +23,7 @@ jobs:
       - name: 🔄 Playlist'i güncelle
         env:
           BASE_URL: ${{ secrets.BASE_URL }}
-          KANALLAR: ${{ variables.KANALLAR }}
+          KANALLAR: ${{ vars.KANALLAR }}
         run: python update_playlist.py
       
       - name: 📤 Değişiklikleri push'la
