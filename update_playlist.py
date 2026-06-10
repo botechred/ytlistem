@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-M3U Playlist Güncelleyici v3.2
+M3U Playlist Güncelleyici v3.3
 - Worker URL'sine GET request atar
 - Redirect veya body'den gerçek stream linkini alır
 - M3U'da #KANAL:xxx etiketine göre günceller
@@ -21,11 +21,11 @@ REQUEST_TIMEOUT = 30
 def get_stream_url(kaynak_url):
     """
     Worker URL'sine istek atar.
-    - Redirect (301, 302, 303, 307, 308) varsa final URL'yi alır
+    - Redirect (301, 302, 303, 307, 308) varsa Location header'ından URL'yi alır
     - Redirect yoksa body'yi okuyup içindeki ilk HTTP linkini döndürür
     """
     try:
-        # SSL sertifika hatalarını görmezden gel (bazı worker'larda sorun olabiliyor)
+        # SSL sertifika hatalarını görmezden gel
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -41,75 +41,63 @@ def get_stream_url(kaynak_url):
         )
         
         # Redirect'leri TAKİP ETME, kendimiz yönetelim
-        # Önce redirect'siz bir istek yapalım
-        class NoRedirectHandler(ur.request.HTTPRedirectHandler):
-            def redirect_request(self, req, fp, code, msg, headers, newurl):
-                # Redirect'i engelle, direkt olarak newurl'yi döndürelim
-                return None
-        
-        opener = ur.request.build_opener(NoRedirectHandler)
-        
-        with opener.open(req, timeout=REQUEST_TIMEOUT) as response:
-            status = response.status
-            final_url = response.geturl()  # Redirect yoksa bu kaynak_url ile aynı
-            
-            print(f"    [DEBUG] HTTP Status: {status}")
-            print(f"    [DEBUG] Response URL: {final_url[:80]}...")
-            
-            # Redirect var mı kontrol et (status 3xx)
-            if status in (301, 302, 303, 307, 308):
-                redirect_url = response.headers.get('Location')
+        try:
+            response = urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT, context=ctx)
+        except urllib.error.HTTPError as e:
+            # 3xx redirect'lerde HTTPError fırlatılabilir, Location header'ını kontrol et
+            if e.code in (301, 302, 303, 307, 308):
+                redirect_url = e.headers.get('Location')
                 if redirect_url:
-                    print(f"    [→] Redirect (Location header): {redirect_url[:80]}...")
-                    # Redirect URL'sine ikinci bir istek yapalım
+                    print(f"    [→] Redirect (HTTP {e.code}): {redirect_url[:80]}...")
+                    # Redirect URL'sine git
                     return get_final_url(redirect_url)
-            
-            # Redirect yok, body'yi oku
-            body = response.read().decode('utf-8', errors='ignore')
-            
-            # Body'de .m3u8 linki ara (önce bunu dene)
-            m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', body)
-            if m3u8_match:
-                stream_url = m3u8_match.group(1)
-                print(f"    [✓] Body'den .m3u8 linki bulundu ✓")
-                print(f"    [DEBUG] Link: {stream_url[:80]}...")
-                return stream_url
-            
-            # Body'de herhangi bir http/https linki ara
-            http_match = re.search(r'(https?://[^\s"\'<>]+)', body)
-            if http_match:
-                stream_url = http_match.group(1)
-                print(f"    [✓] Body'den HTTP linki bulundu ✓")
-                print(f"    [DEBUG] Link: {stream_url[:80]}...")
-                return stream_url
-            
-            # Body'nin kendisi link olabilir mi?
-            body_stripped = body.strip()
-            if body_stripped.startswith("http://") or body_stripped.startswith("https://"):
-                if len(body_stripped) < 1000:  # Çok uzunsa body'dir, link değildir
-                    print(f"    [✓] Body direkt link ✓")
-                    return body_stripped
-            
-            print(f"    [✗] Hiçbir link bulunamadı! Body (ilk 200 karakter): {body[:200]}")
+            print(f"    [✗] HTTP Hatası {e.code}: {e.reason}")
             return None
+        except urllib.error.URLError as e:
+            print(f"    [✗] URL Hatası: {e.reason}")
+            return None
+        
+        # Başarılı yanıt
+        status = response.status
+        final_url = response.geturl()
+        
+        print(f"    [DEBUG] HTTP Status: {status}")
+        
+        # Redirect mi kontrol et
+        if status in (301, 302, 303, 307, 308):
+            redirect_url = response.headers.get('Location')
+            if redirect_url:
+                print(f"    [→] Redirect (Location): {redirect_url[:80]}...")
+                return get_final_url(redirect_url)
+        
+        # Body'yi oku
+        body = response.read().decode('utf-8', errors='ignore')
+        
+        # Body'de .m3u8 linki ara
+        m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', body)
+        if m3u8_match:
+            stream_url = m3u8_match.group(1)
+            print(f"    [✓] Body'den .m3u8 linki bulundu")
+            return stream_url
+        
+        # Body'de herhangi bir http/https linki ara
+        http_match = re.search(r'(https?://[^\s"\'<>]+)', body)
+        if http_match:
+            stream_url = http_match.group(1)
+            print(f"    [✓] Body'den HTTP linki bulundu")
+            return stream_url
+        
+        # Body'nin kendisi link olabilir mi?
+        body_stripped = body.strip()
+        if body_stripped.startswith("http://") or body_stripped.startswith("https://"):
+            if len(body_stripped) < 1000:
+                print(f"    [✓] Body direkt link")
+                return body_stripped
+        
+        print(f"    [✗] Hiçbir link bulunamadı! Body (ilk 200 karakter):")
+        print(f"    [DEBUG] {body[:200]}")
+        return None
             
-    except ur.error.HTTPError as e:
-        print(f"    [✗] HTTP Hatası {e.code}: {e.reason}")
-        # Bazı worker'lar 200 döner ama body'de link olur, bu durumda hata değil
-        if e.code == 200:
-            try:
-                body = e.read().decode('utf-8', errors='ignore')
-                http_match = re.search(r'(https?://[^\s"\'<>]+)', body)
-                if http_match:
-                    stream_url = http_match.group(1)
-                    print(f"    [✓] HTTP 200 body'sinden link bulundu ✓")
-                    return stream_url
-            except:
-                pass
-        return None
-    except ur.error.URLError as e:
-        print(f"    [✗] URL Hatası: {e.reason}")
-        return None
     except socket.timeout:
         print(f"    [✗] Zaman aşımı (>{REQUEST_TIMEOUT}s)")
         return None
@@ -137,9 +125,7 @@ def get_final_url(url):
             }
         )
         
-        opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler)
-        
-        with opener.open(req, timeout=REQUEST_TIMEOUT) as response:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT, context=ctx) as response:
             final_url = response.geturl()
             print(f"    [→] Final URL: {final_url[:80]}...")
             
@@ -215,7 +201,7 @@ def m3u_guncelle(kanallar):
     print(f"  ADIM 1: Worker URL'lerine istek atılıyor...")
     print(f"{'='*60}")
     
-    stream_linkleri = {}  # kanal_adi -> yeni_stream_linki
+    stream_linkleri = {}
     hata_sayisi = 0
     
     for kanal_adi, bilgi in kanallar.items():
@@ -229,7 +215,7 @@ def m3u_guncelle(kanallar):
         
         if yeni_link:
             stream_linkleri[kanal_adi] = yeni_link
-            print(f"    [✓] Stream linki alındı ✓")
+            print(f"    [✓] Stream linki alındı")
         else:
             print(f"    [✗] Stream linki ALINAMADI!")
             hata_sayisi += 1
@@ -245,7 +231,7 @@ def m3u_guncelle(kanallar):
     for i, satir in enumerate(satirlar):
         satir_stripped = satir.strip()
         
-        # #KANAL:xxx satırını bul (Türkçe İ ve normal I, büyük-küçük harf duyarsız)
+        # #KANAL:xxx satırını bul
         kanal_match = re.match(r'#KANAL[İI]?:\s*(.+)', satir_stripped, re.IGNORECASE)
         if kanal_match:
             su_an_kanal = kanal_match.group(1).strip()
@@ -253,17 +239,15 @@ def m3u_guncelle(kanallar):
             yeni_satirlar.append(satir)
             continue
         
-        # URL satırı mı? (http ile başlıyor)
+        # URL satırı mı?
         if satir_stripped.startswith("http://") or satir_stripped.startswith("https://"):
             if su_an_kanal and su_an_kanal in stream_linkleri:
                 yeni_link = stream_linkleri[su_an_kanal]
                 print(f"  [✓] Satır {i+1}: '{su_an_kanal}' linki GÜNCELLENDİ")
-                print(f"       Yeni link: {yeni_link[:80]}...")
                 yeni_satirlar.append(yeni_link + "\n")
                 degisiklik_sayisi += 1
                 su_an_kanal = None
             else:
-                # Kanala ait değil veya stream linki yok, olduğu gibi bırak
                 yeni_satirlar.append(satir)
         else:
             yeni_satirlar.append(satir)
@@ -288,7 +272,7 @@ def m3u_guncelle(kanallar):
 
 def main():
     print(f"\n{'='*60}")
-    print(f"  M3U PLAYLIST GÜNCELLEYİCİ v3.2")
+    print(f"  M3U PLAYLIST GÜNCELLEYİCİ v3.3")
     print(f"  Worker → Stream Link Çözücü")
     print(f"{'='*60}")
     
@@ -296,28 +280,23 @@ def main():
     
     if not kanallar:
         print("\n[!] Secret'lardan veri alınamadı!")
-        print("    Lütfen GitHub repo Settings → Secrets → Actions bölümünden")
-        print("    BASE_URL ve KANALLAR secret'larını kontrol edin.")
         return False
     
     print(f"\n[+] {len(kanallar)} kanal bulundu:")
     for kanal, bilgi in kanallar.items():
         print(f"    • {kanal} → videoId: {bilgi['video_id']}")
     
-    # M3U dosyasını kontrol et
     if os.path.exists(M3U_DOSYASI):
         with open(M3U_DOSYASI, 'r', encoding='utf-8') as f:
             icerik = f.read()
         kanal_etiketleri = re.findall(r'#KANAL[İI]?:\s*(.+)', icerik, re.IGNORECASE)
         print(f"\n[.] M3U dosyasındaki #KANAL etiketleri: {kanal_etiketleri}")
         
-        # Eşleşme kontrolü
         for kanal in kanallar:
             if kanal in kanal_etiketleri:
-                print(f"    ✓ '{kanal}' → M3U'da bulundu, eşleşecek")
+                print(f"    ✓ '{kanal}' → M3U'da bulundu")
             else:
                 print(f"    ⚠️ '{kanal}' → M3U'da BULUNAMADI!")
-                print(f"       Secret'taki kanal adı ile M3U'daki #KANAL etiketi birebir aynı olmalı!")
     else:
         print(f"\n[-] {M3U_DOSYASI} bulunamadı!")
         return False
