@@ -1,10 +1,5 @@
 #EXTM3U
 #KATEGORİ:Haber
-
 #KANAL:Sözcü TV
 #EXTINF:-1,Sözcü TV HD
 https://viziy.botechred.workers.dev/raw?videoId=ztmY_cCtUl0
-
-#KANAL:CNN Türk
-#EXTINF:-1,CNN Türk HD
-https://viziy.botechred.workers.dev/raw?videoId=6N8_r2uwLEc
